@@ -7,19 +7,15 @@ from azure.identity.aio import DefaultAzureCredential
 from user_async_functions import user_async_functions
 from functools import lru_cache
 from contextlib import asynccontextmanager
-from log_utils import setup_logging
-import logging
+from shared_logging import logger
 import json
 from pathlib import Path
 import aiofiles
 import asyncio
 
-# Set up logging
-logger = setup_logging(app_name="nasdaq_assistant", log_level=logging.INFO, max_logs=20)
-
 # Constants
 POLLING_INTERVAL = 2  # Seconds between polling requests
-MESSAGE_TIMEOUT = 60  # Maximum seconds to wait for a response
+MESSAGE_TIMEOUT = 120  # Maximum seconds to wait for a response
 AGENT_INFO_FILE = Path('./config/agent_info.json')  # File to store agent ID
 
 # Ensure config directory exists

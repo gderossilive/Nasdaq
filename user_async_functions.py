@@ -1,33 +1,51 @@
 # Python 3
 import requests
 import json
-import logging
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Set, Callable, Any
-
-# Set up logging
-logger = logging.getLogger(__name__)
-logging.basicConfig(filename='async-app.log', encoding='utf-8', level=logging.DEBUG)
+from shared_logging import logger
 
 async def plot_time_series(data):
     """
-    Plot a time series starting from the json data.
-    :param data: The JSON response from the API
-    :return: The time series as a pandas DataFrame
+    Plot a time series starting from the json data and return it as an in-memory image.
+    
+    This function creates a time series plot from the provided JSON data and returns
+    it as binary data that can be directly displayed in a Chainlit interface without
+    saving to disk.
+    
+    :param data: The JSON response from the API containing time series data
+    :return: Dictionary with keys:
+        - image_data: Binary representation of the PNG image
+        - mime_type: The MIME type of the image (image/png)
     """
-    logging.info('Entering in plot_time_series()')
+    logger.info(f'plot_time_series() tool used.')
+    logger.info('Entering in plot_time_series()')
     # Convert the JSON response to a pandas DataFrame
+    logger.debug(f'working on data: {data}')
     df = pd.DataFrame(data['data'])
     # Convert the date column to datetime
     df['date'] = pd.to_datetime(df['date'])
     # Set the date as the index
     df.set_index('date', inplace=True)
-    # Plot the time series in a line plot stored in a file
-    plt.imsave('time_series.png', df.plot( ).get_figure())
-    logging.info('Generated  time_series.png')
-    # Return the file name
-    return 'time_series.png'
+    
+    # Create the plot
+    plt.figure(figsize=(10, 6))
+    fig = df.plot().get_figure()
+    
+    # Create in-memory representation for Chainlit
+    import io
+    img_buf = io.BytesIO()
+    fig.savefig(img_buf, format='png')
+    img_buf.seek(0)
+    
+    plt.close(fig)  # Close the figure to free memory
+    
+    # Return only image data needed for Chainlit
+    return {
+        "image_data": img_buf.getvalue(),
+        "mime_type": "image/png"
+    }
 
 async def get_news(symbols) -> str:
     """
@@ -64,7 +82,8 @@ async def get_news(symbols) -> str:
         data > similar:	                                Array of news articles which are very similar to the main article.
     
     """
-    logging.info('Getting news for symbol: %s', symbols)
+    logger.info(f'get_news() tool used.')
+    logger.info(f'Getting news for symbol(s): {symbols}')
     # Define the endpoint
     url = "https://api.stockdata.org//v1/news/all"
     headers = {
@@ -76,10 +95,15 @@ async def get_news(symbols) -> str:
         "limit": 2
     }
     # Make the GET request
-    response = requests.get(url, headers=headers, params=params)
-    logging.info('get_news() response: %s', response.json())
-    # Return the JSON response
-    return json.dumps(response.json())
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response_json = response.json()
+        logger.debug(f'get_news() response status: {response.status_code}')
+        # Return the JSON response
+        return json.dumps(response_json)
+    except Exception as e:
+        logger.error(f"Error getting news: {e}")
+        return json.dumps({"error": str(e), "message": "Failed to get news data"})
 
 
 async def get_quote(symbols) -> str:
@@ -109,7 +133,8 @@ async def get_quote(symbols) -> str:
         data > is_extended_hours_price:	    Boolean to identify if the quote is provided from extended hours data.
         data > last_trade_time:	            The time the last trade was identified (local time).
     """
-    logging.info('Getting quote for symbol: %s', symbols)
+    logger.info(f'get_quote() tool used.')
+    logger.info(f'Getting quote for symbol(s): {symbols}')
     # Define the endpoint
     url = "https://api.stockdata.org/v1/data/quote"
     headers = {
@@ -120,10 +145,15 @@ async def get_quote(symbols) -> str:
         "symbols": symbols
     }
     # Make the GET request
-    response = requests.get(url, headers=headers, params=params)
-    logging.info('get_quote() response: %s', response.json())
-    # Return the JSON response
-    return json.dumps(response.json())
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response_json = response.json()
+        logger.debug(f'get_quote() response status: {response.status_code}')
+        # Return the JSON response
+        return json.dumps(response_json)
+    except Exception as e:
+        logger.error(f"Error getting quotes: {e}")
+        return json.dumps({"error": str(e), "message": "Failed to get quote data"})
 
 async def get_historical_eod(symbol) -> str:
     """
@@ -141,7 +171,8 @@ async def get_historical_eod(symbol) -> str:
         data > data > close:	Close price for the specified date/time range.
         data > data > volume:	Trading volume for the specified date/time range.
     """
-    logging.info('Getting historical quotes for symbol: %s', symbol)
+    logger.info(f'get_historical_eod() tool used.')
+    logger.info(f'Getting historical quotes for symbol: {symbol}')
     # Define the endpoint
     url = "https://api.stockdata.org/v1/data/eod"
     headers = {
@@ -152,10 +183,15 @@ async def get_historical_eod(symbol) -> str:
         "symbols": symbol
     }
     # Make the GET request
-    response = requests.get(url, headers=headers, params=params)
-    logging.info('get_historical_eod() response: %s', response.json())
-    # Return the JSON response
-    return json.dumps(response.json())
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response_json = response.json()
+        logger.debug(f'get_historical_eod() response status: {response.status_code}')
+        # Return the JSON response
+        return json.dumps(response_json)
+    except Exception as e:
+        logger.error(f"Error getting historical data: {e}")
+        return json.dumps({"error": str(e), "message": "Failed to get historical data"})
 
 user_async_functions: Set[Callable[..., Any]] = {
     get_quote,
@@ -164,25 +200,4 @@ user_async_functions: Set[Callable[..., Any]] = {
     plot_time_series
 }
 
-#quote=get_quote('MSFT,GOOGL')
-#print(quote)
-
-#news = get_news('MSFT')
-#json_data = json.loads(news.decode('utf-8'))
-
-# Extract titles
-#titles = [item['title'] for item in json_data['data']]
-#urls = [item['url'] for item in json_data['data']]
-
-# Print items
-#for item in json_data['data']:
-#    print(item['title'] + '\n')
-#    print(item['description'] + '\n')
-#    print(item['snippet'] + '\n')
-#    print(item['url'] + '\n')
-#    response = requests.get(item['url'])
-#    soup = BeautifulSoup(response.content, 'html.parser')
-#    paragraphs = soup.find_all('p')
-#    for paragraph in paragraphs:
-#        print(paragraph.text)
-#    print('-------------------------------------------------------------------\n')  
+# The commented code block is not needed in production, so it's been removed

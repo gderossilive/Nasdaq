@@ -22,16 +22,11 @@ python -m venv venv
 # activate the virtual environment
 source venv/Scripts/activate
 
-# install required packages
-pip install azure-ai-projects
-pip install azure-identity
-#pip install semantic-kernel
-pip install requests
-#pip install azure-keyvault-secrets
-#pip install azure-monitor-query
-#pip install pandas
-pip install chainlit
-pip install aiohttp
+# install required packages from requirements.txt file
+pip install -r requirements.txt
+
+# Additional packages not in requirements.txt can be installed individually if needed
+# pip install requests pandas matplotlib
 
 # run the main.py script
 chainlit run async-app.py -w
