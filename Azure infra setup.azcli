@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# IMPORTANT: before to start to execute this script, you need to create a .env file with the following content:
+# MySubscriptionId=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# MyObjectId=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# MyTenantId=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# location=<your favorite location>
+# adminUsername=<your favorite admin username>
+# Refer to the .env.sample file for an example
+
+# import environment variables from .env file
+source .env
+
+#az login --tenant $MyTenantId --use-device-code
+#az account set --subscription $MySubscriptionId # MCAPS tenant
+az login --scope https://management.core.windows.net//.default --tenant $MyTenantId
+az account set --subscription $MySubscriptionId # MCAPS tenant
+
+# create a virtual environment and install the required packages
+python -m venv venv
+
+# activate the virtual environment
+source venv/Scripts/activate
+
+# install required packages
+pip install azure-ai-projects
+pip install azure-identity
+#pip install semantic-kernel
+pip install requests
+#pip install azure-keyvault-secrets
+#pip install azure-monitor-query
+#pip install pandas
+pip install chainlit
+pip install aiohttp
+
+# run the main.py script
+chainlit run async-app.py -w
