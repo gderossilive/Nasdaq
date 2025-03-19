@@ -9,16 +9,24 @@ from functools import lru_cache
 from contextlib import asynccontextmanager
 from log_utils import setup_logging
 import logging
+import json
+from pathlib import Path
+import aiofiles
+import asyncio
 
 # Set up logging
 logger = setup_logging(app_name="nasdaq_assistant", log_level=logging.INFO, max_logs=20)
 
-# Global agent ID (module-level instead of file-based)
-GLOBAL_AGENT_ID = None
-
 # Constants
 POLLING_INTERVAL = 2  # Seconds between polling requests
 MESSAGE_TIMEOUT = 60  # Maximum seconds to wait for a response
+AGENT_INFO_FILE = Path('./config/agent_info.json')  # File to store agent ID
+
+# Ensure config directory exists
+Path('./config').mkdir(exist_ok=True)
+
+# Initialize lock for agent creation
+_agent_lock = asyncio.Lock()
 
 class AppState:
     _instance = None
@@ -61,10 +69,29 @@ async def get_client():
     finally:
         await client.close()
 
-# Initialize the application with optimized client creation
+# Helper functions for agent persistence
+async def save_agent_id(agent_id):
+    """Save agent ID to persistent storage"""
+    try:
+        async with aiofiles.open(AGENT_INFO_FILE, 'w') as f:
+            await f.write(json.dumps({"agent_id": agent_id}))
+        logger.debug(f"Saved agent ID to {AGENT_INFO_FILE}")
+    except Exception as e:
+        logger.warning(f"Failed to save agent ID: {e}")
+
+async def load_agent_id():
+    """Load agent ID from persistent storage"""
+    try:
+        if os.path.exists(AGENT_INFO_FILE):
+            async with aiofiles.open(AGENT_INFO_FILE, 'r') as f:
+                data = json.loads(await f.read())
+                return data.get("agent_id")
+    except Exception as e:
+        logger.warning(f"Failed to load agent ID: {e}")
+    return None
+
+# Initialize the application with optimized client creation and proper locking
 async def initialize() -> None:
-    global GLOBAL_AGENT_ID
-    
     if app_state.initialized:
         logger.debug("Session already initialized, skipping...")
         return
@@ -79,26 +106,34 @@ async def initialize() -> None:
         # Initialize function tools - do this once and cache
         app_state.functions = AsyncFunctionTool(functions=user_async_functions)
         
-        # Use existing agent if available, otherwise create new one
-        if GLOBAL_AGENT_ID:
-            try:
-                app_state.agent = await app_state.project_client.agents.get_agent(GLOBAL_AGENT_ID)
-                logger.info(f"Using existing agent with ID: {GLOBAL_AGENT_ID}")
-            except Exception as e:
-                logger.warning(f"Failed to get existing agent: {e}. Will create new one.")
-                GLOBAL_AGENT_ID = None
+        # Use atomic agent creation with proper locking
+        async with _agent_lock:
+            # First check if we already have an agent in this session
+            agent_id = await load_agent_id()
+            
+            if agent_id:
+                try:
+                    logger.info(f"Attempting to use existing agent with ID: {agent_id}")
+                    app_state.agent = await app_state.project_client.agents.get_agent(agent_id)
+                    logger.info(f"Successfully retrieved existing agent with ID: {agent_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to get existing agent: {e}. Will create new one.")
+                    agent_id = None
+            
+            # Create agent if needed
+            if not agent_id:
+                app_state.agent = await app_state.project_client.agents.create_agent(
+                    model=os.environ["MODEL_DEPLOYMENT_NAME"],
+                    name="Nasdaq Stock Assistant",
+                    instructions="You support people to get information or news about Nasdaq Stocks.",
+                    tools=app_state.functions.definitions,
+                )
+                agent_id = app_state.agent.id
+                logger.info(f"Created new agent, agent ID: {agent_id}")
+                await save_agent_id(agent_id)
+            else:
+                app_state.agent = await app_state.project_client.agents.get_agent(agent_id)
         
-        # Create agent if needed
-        if not GLOBAL_AGENT_ID:
-            app_state.agent = await app_state.project_client.agents.create_agent(
-                model=os.environ["MODEL_DEPLOYMENT_NAME"],
-                name="Nasdaq Stock Assistant",
-                instructions="You support people to get information or news about Nasdaq Stocks.",
-                tools=app_state.functions.definitions,
-            )
-            GLOBAL_AGENT_ID = app_state.agent.id
-            logger.info(f"Created new agent, agent ID: {GLOBAL_AGENT_ID}")
-
         # Create a new thread for this session
         app_state.thread = await app_state.project_client.agents.create_thread()
         logger.info(f"Created thread, ID: {app_state.thread.id}")
@@ -106,7 +141,6 @@ async def initialize() -> None:
         app_state.initialized = True
     except Exception as e:
         logger.error(f"Initialization failed: {e}")
-        # Clean up any partial resources
         await cleanup_session()
         raise
 
@@ -123,35 +157,22 @@ async def cleanup_session():
 
 # Complete server shutdown with agent deletion
 async def shutdown_server():
-    global GLOBAL_AGENT_ID
-    
-    if GLOBAL_AGENT_ID:
-        try:
-            # Create a temporary client if needed
-            temp_client = None
-            if not app_state.project_client:
-                credential = DefaultAzureCredential()
-                temp_client = AIProjectClient.from_connection_string(
-                    credential=credential,
-                    conn_str=os.environ["PROJECT_CONNECTION_STRING"]
-                )
-                client_to_use = temp_client
-            else:
-                client_to_use = app_state.project_client
-            
-            # Delete the agent
-            try:
-                await client_to_use.agents.delete_agent(GLOBAL_AGENT_ID)
-                logger.info(f"Server shutdown: Deleted agent: {GLOBAL_AGENT_ID}")
-                GLOBAL_AGENT_ID = None
-            except Exception as e:
-                logger.error(f"Error deleting agent during shutdown: {e}")
-            
-            # Close temp client if created
-            if temp_client:
-                await temp_client.close()
-        except Exception as e:
-            logger.error(f"Error during server shutdown: {e}")
+    try:
+        # Load agent ID from file
+        agent_id = await load_agent_id()
+        if agent_id:
+            # Only create a client if needed
+            async with get_client() as client:
+                try:
+                    await client.agents.delete_agent(agent_id)
+                    logger.info(f"Server shutdown: Deleted agent: {agent_id}")
+                    # Remove the agent info file
+                    if os.path.exists(AGENT_INFO_FILE):
+                        os.remove(AGENT_INFO_FILE)
+                except Exception as e:
+                    logger.error(f"Error deleting agent during shutdown: {e}")
+    except Exception as e:
+        logger.error(f"Error during server shutdown: {e}")
 
 # Optimized message processing function
 async def process_message(message_content):
@@ -253,14 +274,16 @@ async def main(message: cl.Message):
     logger.info(f"User input: {message.content}")
     
     # Send thinking indicator
-    thinking_msg = cl.Message(content="")
+    thinking_msg = cl.Message(content="Thinking...")
     await thinking_msg.send()
     
     # Process the message
     response = await process_message(message.content)
     
-    # Update with the actual response
-    await thinking_msg.update(content=response)
+    # Send the response as a new message and remove the thinking indicator
+    await cl.Message(content=response).send()
+    await thinking_msg.remove()
+    
     logger.info("Response sent to user")
 
 if __name__ == "__main__":
